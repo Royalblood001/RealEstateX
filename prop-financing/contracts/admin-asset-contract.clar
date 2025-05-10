@@ -1,5 +1,4 @@
 ;; Real Estate Asset Administration Platform
-;; Version 2: Advanced tenancy management with asset details and lifecycle monitoring
 
 ;; Platform error definitions
 (define-constant AUTH-ERROR-CODE (err u401))
@@ -154,3 +153,83 @@
     (ok true)
   )
 )
+
+(define-public (withdraw-asset (asset-id uint))
+  (let (
+    (asset-details (unwrap! (map-get? asset-catalog { asset-id: asset-id }) ASSET-UNAVAILABLE-CODE))
+  )
+    ;; Security validations
+    (asserts! (<= asset-id (var-get inventory-counter)) INVALID-ASSET-ID-CODE)
+    (asserts! (is-eq (get proprietor asset-details) tx-sender) AUTH-ERROR-CODE)
+    (asserts! (is-eq (get availability-state asset-details) "OPEN") ASSET-UNAVAILABLE-CODE)
+    
+    ;; Change availability status
+    (map-set asset-catalog { asset-id: asset-id } 
+      (merge asset-details { availability-state: "WITHDRAWN" }))
+    (ok true)
+  )
+)
+
+(define-public (add-funds (amount uint))
+  (let (
+    (current-balance (default-to u0 (map-get? capital-storage tx-sender)))
+  )
+    ;; Input validation
+    (asserts! (> amount u0) MINIMUM-DEPOSIT-CODE)
+    (asserts! (<= amount SYSTEM-MAX-VALUE) MINIMUM-DEPOSIT-CODE)
+    (asserts! (<= (+ current-balance amount) SYSTEM-MAX-VALUE) MINIMUM-DEPOSIT-CODE)
+    
+    ;; Update account balance
+    (map-set capital-storage tx-sender (+ current-balance amount))
+    (ok true)
+  )
+)
+
+;; System query interfaces
+(define-read-only (fetch-asset-info (asset-id uint))
+  (map-get? asset-catalog { asset-id: asset-id })
+)
+
+(define-read-only (view-account-balance (entity principal))
+  (default-to u0 (map-get? capital-storage entity))
+)
+
+(define-read-only (check-proprietor-rating (proprietor principal))
+  (default-to u0 (map-get? proprietor-trust-score proprietor))
+)
+
+(define-read-only (browse-owned-assets (entity principal))
+  (default-to (list) (map-get? proprietor-asset-portfolio entity))
+)
+
+;; Asset value calculation
+(define-read-only (calculate-asset-value (asset-id uint))
+  (let (
+    (asset-details (default-to 
+                      {
+                        proprietor: tx-sender,
+                        active-occupant: none,
+                        square-footage: u0,
+                        proprietor-fee: u0,
+                        occupancy-term: u0,
+                        enrollment-timestamp: none,
+                        location-details: "",
+                        amenity-details: "",
+                        availability-state: "NOT_FOUND"
+                      }
+                      (map-get? asset-catalog { asset-id: asset-id })))
+  )
+    (if (is-eq (get availability-state asset-details) "NOT_FOUND")
+        u0
+        (let (
+              (market-value (get square-footage asset-details))
+              (fee-component (/ (* market-value (get proprietor-fee asset-details)) u100))
+             )
+          (+ market-value fee-component)
+        )
+    )
+  )
+)
+
+;; System initialization
+(define-data-var inventory-counter uint u0)
